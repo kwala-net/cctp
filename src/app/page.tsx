@@ -12,8 +12,8 @@ import {
 } from 'wagmi';
 import { parseUnits, formatUnits } from 'viem';
 import type { Hex } from 'viem';
-import { CCTP, addressToBytes32, calcMaxFee, USDC_FAUCET } from '@/lib/cctp';
-import { usdcAbi, tokenMessengerV2Abi, messageTransmitterV2Abi } from '@/lib/abis';
+import { CCTP, addressToBytes32, calcMaxFee, USDC_FAUCET, REGISTRY_ADDRESS } from '@/lib/cctp';
+import { usdcAbi, tokenMessengerV2Abi, messageTransmitterV2Abi, cctpRegistryAbi } from '@/lib/abis';
 
 type ChainKey = 'sepolia' | 'avalancheFuji';
 type Step = 'idle' | 'approving' | 'burning' | 'attesting' | 'receiving' | 'done';
@@ -286,6 +286,21 @@ function HomeInner() {
         setState(s => ({ ...s, messageBytes, messageHash }));
       }
 
+      // Register the transfer in the on-chain registry (best-effort — don't block on failure)
+      if (REGISTRY_ADDRESS) {
+        try {
+          await writeContractAsync({
+            address: REGISTRY_ADDRESS,
+            abi: cctpRegistryAbi,
+            functionName: 'register',
+            args: [burnTx, src.domainId, dst.domainId, amountBigint],
+            chainId: src.chain.id,
+          });
+        } catch {
+          // non-critical — proceed even if registry call fails
+        }
+      }
+
       // Persist txHash in URL so a refresh resumes from the attesting step
       router.replace(`/?txHash=${burnTx}&srcChain=${state.srcChain}`);
       setStep('attesting');
@@ -299,17 +314,32 @@ function HomeInner() {
     if (!state.burnTxHash) return;
     setError(null);
     try {
-      const res = await fetch('/api/attestation', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash: state.burnTxHash, srcDomain: src.domainId }),
-      });
+      // POST with no body — the API reads all pending requests from the registry
+      const res = await fetch('/api/attestation', { method: 'POST' });
       const data = await res.json();
-      setAttestationStatus(data.ready ?? false);
-      if (data.ready) {
-        setState(s => ({ ...s, attestation: data.attestation, messageBytes: data.message ?? s.messageBytes }));
+
+      if (!res.ok) {
+        setError(data.error ?? 'Attestation check failed');
+        return;
       }
-      const msgBytes = data.message ?? state.messageBytes;
+
+      // Find this transfer's result in the returned array
+      const results: Array<{ txHash: string; ready: boolean; message: string | null; attestation: string | null }> =
+        data.results ?? [];
+      const mine = results.find(r => r.txHash.toLowerCase() === state.burnTxHash!.toLowerCase());
+
+      if (!mine) {
+        // Not in registry yet (e.g. registry not deployed, or register tx pending)
+        setError('This transfer is not registered in the contract yet. Deploy the registry and retry.');
+        return;
+      }
+
+      setAttestationStatus(mine.ready);
+      if (mine.ready) {
+        setState(s => ({ ...s, attestation: mine.attestation as Hex, messageBytes: mine.message as Hex ?? s.messageBytes }));
+      }
+
+      const msgBytes = mine.message ?? state.messageBytes;
       if (msgBytes) {
         const decRes = await fetch('/api/decode-message', {
           method: 'POST',
@@ -322,7 +352,7 @@ function HomeInner() {
         }
       }
     } catch (err) { setError(String(err)); }
-  }, [state.burnTxHash, state.messageBytes, src.domainId]);
+  }, [state.burnTxHash, state.messageBytes]);
 
   const handleReceive = useCallback(async () => {
     if (!state.messageBytes || !state.attestation) return;
@@ -341,11 +371,27 @@ function HomeInner() {
       });
       setState(s => ({ ...s, receiveTxHash: receiveTx }));
       setStep('done');
+
+      // Mark completed in the registry — switch back to src chain first
+      if (REGISTRY_ADDRESS && state.burnTxHash) {
+        try {
+          await switchChain({ chainId: src.chain.id });
+          await writeContractAsync({
+            address: REGISTRY_ADDRESS,
+            abi: cctpRegistryAbi,
+            functionName: 'markCompleted',
+            args: [state.burnTxHash],
+            chainId: src.chain.id,
+          });
+        } catch {
+          // non-critical
+        }
+      }
     } catch (err) {
       setError(String(err));
       setStep('attesting');
     }
-  }, [state.messageBytes, state.attestation, state.dstChain, connectedKey, dst, switchChain, writeContractAsync]);
+  }, [state.messageBytes, state.attestation, state.burnTxHash, state.dstChain, connectedKey, src, dst, switchChain, writeContractAsync]);
 
   const reset = () => {
     router.replace('/');

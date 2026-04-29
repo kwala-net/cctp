@@ -53,6 +53,38 @@ export const tokenMessengerV2Abi = [
   },
 ] as const;
 
+export const cctpRegistryAbi = [
+  {
+    name: 'register',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'burnTxHash', type: 'bytes32' },
+      { name: 'srcDomain',  type: 'uint32'  },
+      { name: 'dstDomain',  type: 'uint32'  },
+      { name: 'amount',     type: 'uint256' },
+    ],
+    outputs: [],
+  },
+  {
+    name: 'markCompleted',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'burnTxHash', type: 'bytes32' }],
+    outputs: [],
+  },
+  {
+    name: 'getPendingRequests',
+    type: 'function',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [
+      { name: 'txHashes',   type: 'bytes32[]' },
+      { name: 'srcDomains', type: 'uint32[]'  },
+    ],
+  },
+] as const;
+
 export const messageTransmitterV2Abi = [
   {
     name: 'receiveMessage',

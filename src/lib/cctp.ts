@@ -34,6 +34,11 @@ export type ChainKey = keyof typeof CCTP;
 
 export const ATTESTATION_BASE = 'https://iris-api-sandbox.circle.com';
 
+// Set NEXT_PUBLIC_REGISTRY_ADDRESS in .env.local after deploying CCTPRegistry.sol
+export const REGISTRY_ADDRESS = (
+  process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ?? ''
+) as `0x${string}`;
+
 export const USDC_FAUCET = 'https://faucet.circle.com/';
 
 // maxFee = 1% of amount, minimum 1000 (0.001 USDC) to satisfy the testnet minFee threshold
