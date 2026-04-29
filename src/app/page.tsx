@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, Suspense } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import {
   useAccount,
@@ -11,7 +12,7 @@ import {
 } from 'wagmi';
 import { parseUnits, formatUnits } from 'viem';
 import type { Hex } from 'viem';
-import { CCTP, addressToBytes32, USDC_FAUCET } from '@/lib/cctp';
+import { CCTP, addressToBytes32, calcMaxFee, USDC_FAUCET } from '@/lib/cctp';
 import { usdcAbi, tokenMessengerV2Abi, messageTransmitterV2Abi } from '@/lib/abis';
 
 type ChainKey = 'sepolia' | 'avalancheFuji';
@@ -191,19 +192,24 @@ function Label({ children }: { children: React.ReactNode }) {
   return <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">{children}</span>;
 }
 
-export default function Home() {
+function HomeInner() {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
   const { switchChain } = useSwitchChain();
   const { writeContractAsync } = useWriteContract();
+  const searchParams = useSearchParams();
+  const router = useRouter();
 
-  const [step, setStep] = useState<Step>('idle');
+  const urlTxHash = searchParams.get('txHash') as Hex | null;
+  const urlSrcChain = (searchParams.get('srcChain') ?? 'sepolia') as ChainKey;
+
+  const [step, setStep] = useState<Step>(urlTxHash ? 'attesting' : 'idle');
   const [state, setState] = useState<TransferState>({
-    srcChain: 'sepolia',
-    dstChain: 'avalancheFuji',
+    srcChain: urlSrcChain,
+    dstChain: urlSrcChain === 'sepolia' ? 'avalancheFuji' : 'sepolia',
     amount: '1',
     approveTxHash: null,
-    burnTxHash: null,
+    burnTxHash: urlTxHash,
     messageBytes: null,
     messageHash: null,
     attestation: null,
@@ -212,6 +218,20 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [attestationStatus, setAttestationStatus] = useState<boolean | null>(null);
   const [decodedMessage, setDecodedMessage] = useState<Record<string, unknown> | null>(null);
+
+  // On mount with a txHash in the URL, fetch messageBytes from the receipt
+  useEffect(() => {
+    if (!urlTxHash) return;
+    fetch(`/api/burn-info?txHash=${urlTxHash}&srcChain=${urlSrcChain}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.messageBytes) {
+          setState(s => ({ ...s, messageBytes: data.messageBytes, messageHash: data.messageHash }));
+        }
+      })
+      .catch(() => null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const src = CCTP[state.srcChain];
   const dst = CCTP[state.dstChain];
@@ -253,8 +273,9 @@ export default function Home() {
         args: [
           amountBigint, dst.domainId, addressToBytes32(address),
           src.usdc, `0x${'00'.repeat(32)}` as Hex,
-          0n, 2000,
+          calcMaxFee(amountBigint), 2000,
         ],
+        gas: 500_000n,
         chainId: src.chain.id,
       });
       setState(s => ({ ...s, burnTxHash: burnTx }));
@@ -265,6 +286,8 @@ export default function Home() {
         setState(s => ({ ...s, messageBytes, messageHash }));
       }
 
+      // Persist txHash in URL so a refresh resumes from the attesting step
+      router.replace(`/?txHash=${burnTx}&srcChain=${state.srcChain}`);
       setStep('attesting');
     } catch (err) {
       setError(String(err));
@@ -325,6 +348,7 @@ export default function Home() {
   }, [state.messageBytes, state.attestation, state.dstChain, connectedKey, dst, switchChain, writeContractAsync]);
 
   const reset = () => {
+    router.replace('/');
     setStep('idle');
     setState(s => ({ ...s, approveTxHash: null, burnTxHash: null, messageBytes: null, messageHash: null, attestation: null, receiveTxHash: null }));
     setAttestationStatus(null);
@@ -425,7 +449,7 @@ export default function Home() {
             </div>
 
             <div className="flex gap-3 text-xs text-slate-500">
-              <span>Fee: <span className="text-slate-400">none</span></span>
+              <span>Max fee: <span className="text-slate-400">{amountBigint > 0n ? formatUnits(calcMaxFee(amountBigint), 6) : '0'} USDC (1%)</span></span>
               <span className="text-slate-700">|</span>
               <span>Finality: <span className="text-slate-400">Standard (~15–20 min)</span></span>
             </div>
@@ -570,5 +594,13 @@ export default function Home() {
 
       </main>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense>
+      <HomeInner />
+    </Suspense>
   );
 }

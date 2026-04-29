@@ -36,10 +36,10 @@ export const ATTESTATION_BASE = 'https://iris-api-sandbox.circle.com';
 
 export const USDC_FAUCET = 'https://faucet.circle.com/';
 
-// maxFee = 0.1% of amount, minimum 1 (in USDC base units, 6 decimals)
+// maxFee = 1% of amount, minimum 1000 (0.001 USDC) to satisfy the testnet minFee threshold
 export function calcMaxFee(amount: bigint): bigint {
-  const fee = amount / 1000n;
-  return fee < 1n ? 1n : fee;
+  const fee = amount / 100n;
+  return fee < 1000n ? 1000n : fee;
 }
 
 export function addressToBytes32(addr: `0x${string}`): `0x${string}` {
