@@ -1,3 +1,4 @@
+import { NextRequest } from 'next/server';
 import { createPublicClient, http } from 'viem';
 import { sepolia } from 'wagmi/chains';
 import { cctpRegistryAbi } from '@/lib/abis';
@@ -35,16 +36,36 @@ async function checkOneAttestation(txHash: string, srcDomain: number) {
 }
 
 /**
- * POST /api/attestation  (no body required)
+ * POST /api/attestation
  *
- * 1. Reads pending requests from CCTPRegistry on Sepolia.
- * 2. For each, calls Circle's sandbox attestation API with a 2 s gap.
- * 3. Returns an array of results — one per pending request.
+ * Two modes depending on whether a JSON body is present:
  *
- * Called by Kwala on its own schedule. The frontend also calls it
- * via the "Check now" button to simulate one tick.
+ * Direct mode  — body: { txHash: "0x...", srcDomain: 0 }
+ *   Bypasses the registry. Calls Circle for that single tx and returns
+ *   { results: [{ txHash, ready, message, attestation, status }] }.
+ *   Used by the frontend when the tx isn't in the registry (e.g. predates it).
+ *
+ * Registry mode — no body (or empty body)
+ *   1. Reads pending requests from CCTPRegistry on Sepolia.
+ *   2. Calls Circle for each, 2 s apart.
+ *   3. Returns { results: [...] } — one entry per pending request.
+ *   Called by Kwala on its own schedule.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
+  // Try to parse an optional body — empty / missing body is fine
+  let body: Record<string, unknown> = {};
+  try { body = await req.json(); } catch { /* empty body */ }
+
+  const directTxHash  = body?.txHash  as string | undefined;
+  const directDomain  = body?.srcDomain != null ? Number(body.srcDomain) : undefined;
+
+  // ── Direct mode ────────────────────────────────────────────────────────────
+  if (directTxHash && directDomain != null) {
+    const result = await checkOneAttestation(directTxHash as `0x${string}`, directDomain);
+    return Response.json({ results: [result] });
+  }
+
+  // ── Registry mode ──────────────────────────────────────────────────────────
   if (!REGISTRY_ADDRESS) {
     return Response.json(
       { error: 'NEXT_PUBLIC_REGISTRY_ADDRESS is not set. Deploy the contract first.' },
@@ -52,7 +73,6 @@ export async function POST() {
     );
   }
 
-  // 1. Get pending requests from the on-chain registry
   let txHashes: readonly `0x${string}`[];
   let srcDomains: readonly number[];
   try {
@@ -73,7 +93,6 @@ export async function POST() {
     return Response.json({ results: [] });
   }
 
-  // 2. Poll Circle for each pending request, 2 s apart
   const results = [];
   for (let i = 0; i < txHashes.length; i++) {
     if (i > 0) await sleep(2000);

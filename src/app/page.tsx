@@ -217,19 +217,69 @@ function HomeInner() {
   });
   const [error, setError] = useState<string | null>(null);
   const [attestationStatus, setAttestationStatus] = useState<boolean | null>(null);
+  const [checking, setChecking] = useState(false);
   const [decodedMessage, setDecodedMessage] = useState<Record<string, unknown> | null>(null);
 
-  // On mount with a txHash in the URL, fetch messageBytes from the receipt
+  // SSR guard: useState initializers run with empty searchParams on the server,
+  // so step and burnTxHash may be wrong after hydration. Fix them once on the client.
   useEffect(() => {
     if (!urlTxHash) return;
+    setStep(s => s === 'idle' ? 'attesting' : s);
+    setState(s => s.burnTxHash ? s : { ...s, burnTxHash: urlTxHash });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlTxHash]);
+
+  // On mount with a txHash in the URL: fetch burn info + auto-check attestation.
+  useEffect(() => {
+    if (!urlTxHash) return;
+    const srcDomain = CCTP[urlSrcChain].domainId;
+
     fetch(`/api/burn-info?txHash=${urlTxHash}&srcChain=${urlSrcChain}`)
       .then(r => r.ok ? r.json() : null)
-      .then(data => {
+      .then((data: { messageBytes?: string; messageHash?: string } | null) => {
         if (data?.messageBytes) {
-          setState(s => ({ ...s, messageBytes: data.messageBytes, messageHash: data.messageHash }));
+          setState(s => ({ ...s, messageBytes: data.messageBytes as Hex, messageHash: data.messageHash as Hex }));
         }
       })
       .catch(() => null);
+
+    setChecking(true);
+    fetch('/api/attestation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ txHash: urlTxHash, srcDomain }),
+    })
+      .then(async r => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.error ?? `HTTP ${r.status}`);
+        return data as { results: Array<{ ready: boolean; message: string | null; attestation: string | null }> };
+      })
+      .then(data => {
+        const result = data?.results?.[0];
+        if (!result) return;
+        setAttestationStatus(result.ready);
+        if (result.ready) {
+          setState(s => ({
+            ...s,
+            attestation: result.attestation as Hex,
+            messageBytes: (result.message as Hex) ?? s.messageBytes,
+          }));
+        }
+        if (result.message) {
+          fetch('/api/decode-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messageBytes: result.message }),
+          })
+            .then(r => r.ok ? r.json() : null)
+            .then((dec: { decoded?: Record<string, unknown> } | null) => {
+              if (dec?.decoded) setDecodedMessage(dec.decoded);
+            })
+            .catch(() => null);
+        }
+      })
+      .catch(err => setError('Attestation check failed: ' + String(err)))
+      .finally(() => setChecking(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -311,28 +361,23 @@ function HomeInner() {
   }, [address, connectedKey, state.srcChain, amountBigint, src, dst, switchChain, writeContractAsync]);
 
   const checkAttestation = useCallback(async () => {
-    if (!state.burnTxHash) return;
+    const txHash = (state.burnTxHash ?? urlTxHash) as Hex | null;
+    if (!txHash) return;
     setError(null);
+    setChecking(true);
+    type AttestResult = { txHash: string; ready: boolean; message: string | null; attestation: string | null };
     try {
-      // POST with no body — the API reads all pending requests from the registry
-      const res = await fetch('/api/attestation', { method: 'POST' });
+      // Direct mode: call Circle for this specific tx
+      const res = await fetch('/api/attestation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash, srcDomain: src.domainId }),
+      });
       const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
 
-      if (!res.ok) {
-        setError(data.error ?? 'Attestation check failed');
-        return;
-      }
-
-      // Find this transfer's result in the returned array
-      const results: Array<{ txHash: string; ready: boolean; message: string | null; attestation: string | null }> =
-        data.results ?? [];
-      const mine = results.find(r => r.txHash.toLowerCase() === state.burnTxHash!.toLowerCase());
-
-      if (!mine) {
-        // Not in registry yet (e.g. registry not deployed, or register tx pending)
-        setError('This transfer is not registered in the contract yet. Deploy the registry and retry.');
-        return;
-      }
+      const mine = data.results?.[0] as AttestResult | undefined;
+      if (!mine) throw new Error('No result from attestation API');
 
       setAttestationStatus(mine.ready);
       if (mine.ready) {
@@ -351,8 +396,12 @@ function HomeInner() {
           setDecodedMessage(decoded);
         }
       }
-    } catch (err) { setError(String(err)); }
-  }, [state.burnTxHash, state.messageBytes]);
+    } catch (err) {
+      setError('Attestation check failed: ' + String(err));
+    } finally {
+      setChecking(false);
+    }
+  }, [state.burnTxHash, state.messageBytes, src.domainId, urlTxHash]);
 
   const handleReceive = useCallback(async () => {
     if (!state.messageBytes || !state.attestation) return;
@@ -398,6 +447,7 @@ function HomeInner() {
     setStep('idle');
     setState(s => ({ ...s, approveTxHash: null, burnTxHash: null, messageBytes: null, messageHash: null, attestation: null, receiveTxHash: null }));
     setAttestationStatus(null);
+    setChecking(false);
     setDecodedMessage(null);
     setError(null);
   };
@@ -472,7 +522,7 @@ function HomeInner() {
           step={2}
           title={`Approve & Burn on ${src.name}`}
           active={isConnected && (step === 'idle' || step === 'approving' || step === 'burning')}
-          done={!!state.burnTxHash && step !== 'approving' && step !== 'burning'}
+          done={(!!state.burnTxHash || !!urlTxHash) && step !== 'approving' && step !== 'burning'}
         >
           <div className="space-y-4">
             <div>
@@ -522,7 +572,9 @@ function HomeInner() {
         </Card>
 
         {/* Step 3 — Attestation */}
-        <Card step={3} title="Circle Attestation" active={step === 'attesting'} done={attestationStatus === true && step !== 'attesting'}>
+        <Card step={3} title="Circle Attestation"
+          active={step === 'attesting' || (!!urlTxHash && step !== 'receiving' && step !== 'done')}
+          done={attestationStatus === true && step !== 'attesting'}>
           <div className="space-y-4">
             <p className="text-sm text-slate-400 leading-relaxed">
               Circle signs the burn message once it&apos;s confirmed on-chain.{' '}
@@ -541,8 +593,8 @@ function HomeInner() {
             )}
 
             <div className="flex items-center gap-3 flex-wrap">
-              <GhostButton onClick={checkAttestation} disabled={!state.burnTxHash}>
-                Check now (simulate Kwala tick)
+              <GhostButton onClick={checkAttestation} disabled={checking || (!state.burnTxHash && !urlTxHash)}>
+                {checking ? 'Checking…' : 'Check now (simulate Kwala tick)'}
               </GhostButton>
               <StatusBadge ready={attestationStatus} />
             </div>
