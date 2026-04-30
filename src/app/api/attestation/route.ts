@@ -105,6 +105,9 @@ export async function POST(req: NextRequest) {
   }
 
   const relayer = getRelayerWalletClient();
+  if (!relayer) {
+    console.warn('REGISTRY_RELAYER_PRIVATE_KEY not set — markAttested will be skipped');
+  }
   const results = [];
   for (let i = 0; i < txHashes.length; i++) {
     if (i > 0) await sleep(2000);
@@ -119,8 +122,8 @@ export async function POST(req: NextRequest) {
           functionName: 'markAttested',
           args: [txHashes[i], result.message as `0x${string}`, result.attestation as `0x${string}`],
         });
-      } catch {
-        // non-critical — log and continue
+      } catch (err) {
+        console.error('markAttested failed', { txHash: txHashes[i], err });
       }
     }
   }
