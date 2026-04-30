@@ -1,10 +1,21 @@
 import { NextRequest } from 'next/server';
-import { createPublicClient, http } from 'viem';
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { sepolia } from 'wagmi/chains';
 import { cctpRegistryAbi } from '@/lib/abis';
 import { REGISTRY_ADDRESS, ATTESTATION_BASE } from '@/lib/cctp';
 
 const publicClient = createPublicClient({ chain: sepolia, transport: http() });
+
+// Server-side relayer key — set REGISTRY_RELAYER_PRIVATE_KEY in .env.local
+// This wallet only needs enough Sepolia ETH to cover gas for markAttested calls.
+function getRelayerWalletClient() {
+  const raw = process.env.REGISTRY_RELAYER_PRIVATE_KEY;
+  if (!raw) return null;
+  const key = raw.startsWith('0x') ? raw as `0x${string}` : `0x${raw}` as `0x${string}`;
+  const account = privateKeyToAccount(key);
+  return createWalletClient({ account, chain: sepolia, transport: http() });
+}
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -93,11 +104,25 @@ export async function POST(req: NextRequest) {
     return Response.json({ results: [] });
   }
 
+  const relayer = getRelayerWalletClient();
   const results = [];
   for (let i = 0; i < txHashes.length; i++) {
     if (i > 0) await sleep(2000);
     const result = await checkOneAttestation(txHashes[i], srcDomains[i]);
     results.push(result);
+
+    if (result.ready && result.message && result.attestation && REGISTRY_ADDRESS && relayer) {
+      try {
+        await relayer.writeContract({
+          address: REGISTRY_ADDRESS,
+          abi: cctpRegistryAbi,
+          functionName: 'markAttested',
+          args: [txHashes[i], result.message as `0x${string}`, result.attestation as `0x${string}`],
+        });
+      } catch {
+        // non-critical — log and continue
+      }
+    }
   }
 
   return Response.json({ results });

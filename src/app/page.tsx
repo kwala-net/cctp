@@ -421,27 +421,11 @@ function HomeInner() {
       });
       setState(s => ({ ...s, receiveTxHash: receiveTx }));
       setStep('done');
-
-      // Mark completed in the registry — switch back to src chain first
-      if (REGISTRY_ADDRESS && state.burnTxHash) {
-        try {
-          await switchChain({ chainId: src.chain.id });
-          await writeContractAsync({
-            address: REGISTRY_ADDRESS,
-            abi: cctpRegistryAbi,
-            functionName: 'markCompleted',
-            args: [state.burnTxHash],
-            chainId: src.chain.id,
-          });
-        } catch {
-          // non-critical
-        }
-      }
     } catch (err) {
       setError(String(err));
       setStep('attesting');
     }
-  }, [state.messageBytes, state.attestation, state.burnTxHash, state.dstChain, connectedKey, src, dst, switchChain, writeContractAsync]);
+  }, [state.messageBytes, state.attestation, state.dstChain, connectedKey, dst, switchChain, writeContractAsync]);
 
   const reset = () => {
     router.replace('/');

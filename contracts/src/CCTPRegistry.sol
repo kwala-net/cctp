@@ -11,8 +11,10 @@ contract CCTPRegistry {
         uint32  dstDomain;
         address sender;
         uint256 amount;      // USDC amount in 6-decimal base units
-        bool    completed;
+        bool    attested;
         uint256 createdAt;
+        bytes   messageBytes;
+        bytes   attestation;
     }
 
     /// burnTxHash → request
@@ -21,7 +23,8 @@ contract CCTPRegistry {
     bytes32[] public allIds;
 
     event RequestRegistered(bytes32 indexed burnTxHash, address indexed sender, uint32 srcDomain, uint32 dstDomain, uint256 amount);
-    event RequestCompleted(bytes32 indexed burnTxHash);
+    /// Emitted when the Circle attestation is ready. Kwala listens for this to call receiveMessage on the destination chain.
+    event RequestCompleted(bytes32 indexed burnTxHash, address indexed sender, bytes messageBytes, bytes attestation);
 
     /// @notice Register a new transfer request right after the burn tx is submitted.
     function register(
@@ -32,24 +35,34 @@ contract CCTPRegistry {
     ) external {
         require(requests[burnTxHash].createdAt == 0, "Already registered");
         requests[burnTxHash] = TransferRequest({
-            burnTxHash: burnTxHash,
-            srcDomain:  srcDomain,
-            dstDomain:  dstDomain,
-            sender:     msg.sender,
-            amount:     amount,
-            completed:  false,
-            createdAt:  block.timestamp
+            burnTxHash:   burnTxHash,
+            srcDomain:    srcDomain,
+            dstDomain:    dstDomain,
+            sender:       msg.sender,
+            amount:       amount,
+            attested:     false,
+            createdAt:    block.timestamp,
+            messageBytes: '',
+            attestation:  ''
         });
         allIds.push(burnTxHash);
         emit RequestRegistered(burnTxHash, msg.sender, srcDomain, dstDomain, amount);
     }
 
-    /// @notice Mark a transfer as completed once receiveMessage succeeds on the destination.
-    function markCompleted(bytes32 burnTxHash) external {
+    /// @notice Record the Circle attestation once ready. Emits RequestCompleted so Kwala
+    ///         can call receiveMessage on the destination chain without the user signing.
+    function markAttested(
+        bytes32 burnTxHash,
+        bytes calldata messageBytes,
+        bytes calldata attestation
+    ) external {
         require(requests[burnTxHash].createdAt != 0, "Not found");
-        require(!requests[burnTxHash].completed,     "Already completed");
-        requests[burnTxHash].completed = true;
-        emit RequestCompleted(burnTxHash);
+        require(!requests[burnTxHash].attested,      "Already attested");
+        TransferRequest storage req = requests[burnTxHash];
+        req.attested     = true;
+        req.messageBytes = messageBytes;
+        req.attestation  = attestation;
+        emit RequestCompleted(burnTxHash, req.sender, messageBytes, attestation);
     }
 
     /// @notice Return all pending (not-yet-completed) requests.
@@ -62,7 +75,7 @@ contract CCTPRegistry {
         uint256 total = allIds.length;
         uint256 count = 0;
         for (uint256 i = 0; i < total; i++) {
-            if (!requests[allIds[i]].completed) count++;
+            if (!requests[allIds[i]].attested) count++;
         }
 
         txHashes   = new bytes32[](count);
@@ -71,7 +84,7 @@ contract CCTPRegistry {
         uint256 idx = 0;
         for (uint256 i = 0; i < total; i++) {
             bytes32 id = allIds[i];
-            if (!requests[id].completed) {
+            if (!requests[id].attested) {
                 txHashes[idx]   = id;
                 srcDomains[idx] = requests[id].srcDomain;
                 idx++;

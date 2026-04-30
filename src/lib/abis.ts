@@ -67,11 +67,25 @@ export const cctpRegistryAbi = [
     outputs: [],
   },
   {
-    name: 'markCompleted',
+    name: 'markAttested',
     type: 'function',
     stateMutability: 'nonpayable',
-    inputs: [{ name: 'burnTxHash', type: 'bytes32' }],
+    inputs: [
+      { name: 'burnTxHash',   type: 'bytes32' },
+      { name: 'messageBytes', type: 'bytes'   },
+      { name: 'attestation',  type: 'bytes'   },
+    ],
     outputs: [],
+  },
+  {
+    name: 'RequestCompleted',
+    type: 'event',
+    inputs: [
+      { name: 'burnTxHash',   type: 'bytes32', indexed: true  },
+      { name: 'sender',       type: 'address', indexed: true  },
+      { name: 'messageBytes', type: 'bytes',   indexed: false },
+      { name: 'attestation',  type: 'bytes',   indexed: false },
+    ],
   },
   {
     name: 'getPendingRequests',
