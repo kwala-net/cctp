@@ -1,8 +1,9 @@
-import { sepolia, avalancheFuji } from 'wagmi/chains';
+import { sepolia, avalancheFuji, arbitrumSepolia } from 'wagmi/chains';
 
 export const CHAINS = {
   sepolia,
   avalancheFuji,
+  arbitrumSepolia,
 } as const;
 
 export const CCTP = {
@@ -27,6 +28,17 @@ export const CCTP = {
     name: 'Avalanche Fuji',
     nativeSymbol: 'AVAX',
     faucet: 'https://faucet.avax.network/',
+  },
+  arbitrumSepolia: {
+    chain: arbitrumSepolia,
+    domainId: 3,
+    usdc: '0xf3c3351D6Bd0098EeB33ca8f830faf2a141Ea2e1' as `0x${string}`,
+    tokenMessenger: '0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA' as `0x${string}`,
+    messageTransmitter: '0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275' as `0x${string}`,
+    explorerTx: (hash: string) => `https://sepolia.arbiscan.io/tx/${hash}`,
+    name: 'Arbitrum Sepolia',
+    nativeSymbol: 'ETH',
+    faucet: 'https://www.alchemy.com/faucets/arbitrum-sepolia',
   },
 } as const;
 

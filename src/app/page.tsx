@@ -15,7 +15,7 @@ import type { Hex } from 'viem';
 import { CCTP, addressToBytes32, calcMaxFee, USDC_FAUCET, REGISTRY_ADDRESS } from '@/lib/cctp';
 import { usdcAbi, tokenMessengerV2Abi, messageTransmitterV2Abi, cctpRegistryAbi } from '@/lib/abis';
 
-type ChainKey = 'sepolia' | 'avalancheFuji';
+type ChainKey = 'sepolia' | 'avalancheFuji' | 'arbitrumSepolia';
 type Step = 'idle' | 'approving' | 'burning' | 'attesting' | 'receiving' | 'done';
 
 interface TransferState {
@@ -33,6 +33,7 @@ interface TransferState {
 const CHAIN_ID_MAP: Record<number, ChainKey> = {
   [CCTP.sepolia.chain.id]: 'sepolia',
   [CCTP.avalancheFuji.chain.id]: 'avalancheFuji',
+  [CCTP.arbitrumSepolia.chain.id]: 'arbitrumSepolia',
 };
 
 function truncateHex(hex: string, chars = 8): string {
@@ -470,7 +471,7 @@ function HomeInner() {
               <span className="text-xs font-semibold tracking-widest text-indigo-400 uppercase">Circle CCTP V2</span>
             </div>
             <h1 className="text-2xl font-bold text-white tracking-tight">Cross-Chain Transfer</h1>
-            <p className="text-sm text-slate-500 mt-1">Sepolia → Avalanche Fuji · Fast transfer</p>
+            <p className="text-sm text-slate-500 mt-1">{src.name} → {dst.name} · Fast transfer</p>
           </div>
           <ConnectButton showBalance={false} />
         </div>
@@ -525,6 +526,26 @@ function HomeInner() {
           done={(!!state.burnTxHash || !!urlTxHash) && step !== 'approving' && step !== 'burning'}
         >
           <div className="space-y-4">
+            <div>
+              <Label>Destination chain</Label>
+              <div className="flex gap-1 mt-1.5 p-1 bg-slate-800 rounded-xl w-fit">
+                {(['avalancheFuji', 'arbitrumSepolia'] as const).map(key => (
+                  <button
+                    key={key}
+                    onClick={() => setState(s => ({ ...s, dstChain: key }))}
+                    disabled={step !== 'idle'}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all disabled:cursor-not-allowed ${
+                      state.dstChain === key
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-slate-200 disabled:hover:text-slate-400'
+                    }`}
+                  >
+                    {CCTP[key].name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div>
               <Label>Amount</Label>
               <div className="flex items-center gap-2 mt-1.5">
@@ -632,7 +653,7 @@ function HomeInner() {
                     <p className="text-xs text-emerald-500/80 mt-0.5">USDC minted on {dst.name}</p>
                   </div>
                 </div>
-                <TxLink href={dst.explorerTx(state.receiveTxHash)} label={`View on ${dst.name === 'Avalanche Fuji' ? 'Snowtrace' : 'Explorer'}: ${truncateHex(state.receiveTxHash)}`} />
+                <TxLink href={dst.explorerTx(state.receiveTxHash)} label={`View on ${dst.name}: ${truncateHex(state.receiveTxHash)}`} />
                 <GhostButton onClick={reset}>Start new transfer</GhostButton>
               </div>
             ) : attestationStatus ? (
