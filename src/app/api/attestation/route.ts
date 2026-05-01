@@ -24,8 +24,20 @@ function sleep(ms: number) {
 async function checkOneAttestation(txHash: string, srcDomain: number) {
   const upstream = `${ATTESTATION_BASE}/v2/messages/${srcDomain}?transactionHash=${txHash}`;
   try {
+    console.log('[attestation] iris request', { txHash, srcDomain, upstream });
     const r = await fetch(upstream, { cache: 'no-store' });
+    console.log('[attestation] iris response status', {
+      txHash,
+      srcDomain,
+      status: r.status,
+      ok: r.ok,
+    });
     const body = await r.json() as Record<string, unknown>;
+    console.log('[attestation] iris response body', {
+      txHash,
+      srcDomain,
+      body,
+    });
     const messages = (body?.messages as Record<string, unknown>[] | undefined) ?? [];
     const msg = messages[0];
     const attestation = (msg?.attestation as string | undefined) ?? null;
@@ -72,7 +84,39 @@ export async function POST(req: NextRequest) {
 
   // ── Direct mode ────────────────────────────────────────────────────────────
   if (directTxHash && directDomain != null) {
+    console.log('[attestation] mode=direct', { txHash: directTxHash, srcDomain: directDomain });
     const result = await checkOneAttestation(directTxHash as `0x${string}`, directDomain);
+    const relayer = getRelayerWalletClient();
+    if (!relayer) {
+      console.warn('[attestation] direct mode: REGISTRY_RELAYER_PRIVATE_KEY missing, skipping markAttested');
+    }
+    if (result.ready && result.message && result.attestation && REGISTRY_ADDRESS && relayer) {
+      try {
+        const markTxHash = await relayer.writeContract({
+          address: REGISTRY_ADDRESS,
+          abi: cctpRegistryAbi,
+          functionName: 'markAttested',
+          args: [directTxHash as `0x${string}`, result.message as `0x${string}`, result.attestation as `0x${string}`],
+        });
+        console.log('[attestation] direct mode markAttested submitted', {
+          burnTxHash: directTxHash,
+          markTxHash,
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: markTxHash });
+        console.log('[attestation] direct mode markAttested mined', {
+          burnTxHash: directTxHash,
+          markTxHash,
+          status: receipt.status,
+          blockNumber: receipt.blockNumber.toString(),
+          gasUsed: receipt.gasUsed.toString(),
+        });
+      } catch (err) {
+        console.error('[attestation] direct mode markAttested failed', {
+          txHash: directTxHash,
+          err,
+        });
+      }
+    }
     return Response.json({ results: [result] });
   }
 
@@ -83,6 +127,7 @@ export async function POST(req: NextRequest) {
       { status: 503 }
     );
   }
+  console.log('[attestation] mode=registry', { registry: REGISTRY_ADDRESS });
 
   let txHashes: readonly `0x${string}`[];
   let srcDomains: readonly number[];
@@ -101,6 +146,7 @@ export async function POST(req: NextRequest) {
   }
 
   if (txHashes.length === 0) {
+    console.log('[attestation] registry has no pending requests');
     return Response.json({ results: [] });
   }
 
@@ -116,11 +162,23 @@ export async function POST(req: NextRequest) {
 
     if (result.ready && result.message && result.attestation && REGISTRY_ADDRESS && relayer) {
       try {
-        await relayer.writeContract({
+        const markTxHash = await relayer.writeContract({
           address: REGISTRY_ADDRESS,
           abi: cctpRegistryAbi,
           functionName: 'markAttested',
           args: [txHashes[i], result.message as `0x${string}`, result.attestation as `0x${string}`],
+        });
+        console.log('[attestation] markAttested submitted', {
+          burnTxHash: txHashes[i],
+          markTxHash,
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash: markTxHash });
+        console.log('[attestation] markAttested mined', {
+          burnTxHash: txHashes[i],
+          markTxHash,
+          status: receipt.status,
+          blockNumber: receipt.blockNumber.toString(),
+          gasUsed: receipt.gasUsed.toString(),
         });
       } catch (err) {
         console.error('markAttested failed', { txHash: txHashes[i], err });
